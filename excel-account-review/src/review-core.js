@@ -45,11 +45,20 @@
     cell.style = Object.assign({}, cell.style, { fill: solid(argb) });
   }
 
-  // ---- Tách "fragments" literal từ 1 keyword/pattern ----
-  // Bỏ <placeholder>, cắt theo dấu "..." , chuẩn hoá từng mảnh.
-  function toFrags(key) {
-    var cleaned = String(key).replace(/<[^>]*>/g, ' ');
-    return cleaned.split(/\.\.\.|…/).map(norm).filter(function (f) { return f.length > 0; });
+  // ---- Tách 1 keyword/pattern thành các "biến thể" (alternatives) ----
+  // Dấu " / " trong key nghĩa là HOẶC → mỗi bên là một biến thể riêng
+  //   (vd. "COLES / COLESSUPERM", "BUSINESS FUEL / FLEET CARD").
+  // Trong mỗi biến thể: bỏ <placeholder>, cắt theo "..." → các mảnh literal
+  //   phải cùng xuất hiện trong description thì biến thể mới khớp.
+  // Trả về mảng các biến thể, mỗi biến thể là mảng fragments đã chuẩn hoá.
+  function toAlts(key) {
+    var alts = [];
+    String(key).split(/\s*\/\s*/).forEach(function (part) {
+      var frags = part.replace(/<[^>]*>/g, ' ').split(/\.\.\.|…/).map(norm)
+        .filter(function (f) { return f.length > 0; });
+      if (frags.length) alts.push(frags);
+    });
+    return alts;
   }
 
   // =====================================================================
@@ -87,9 +96,9 @@
           var acct = cellText(ws.getCell(rr, cols.acct)).trim();
           if (!key || !acct) continue;
           var status = cols.status ? cellText(ws.getCell(rr, cols.status)).trim() : 'CONFIRMED';
-          var frags = toFrags(key);
-          if (!frags.length) continue;
-          rules.push({ key: key, frags: frags, acct: acct, status: status, sheet: ws.name });
+          var alts = toAlts(key);
+          if (!alts.length) continue;
+          rules.push({ key: key, alts: alts, acct: acct, status: status, sheet: ws.name });
         }
       }
     });
@@ -120,11 +129,17 @@
     if (!dn) return null;
     var best = null, bestScore = -1, accts = new Set();
     for (var i = 0; i < rules.length; i++) {
-      var ru = rules[i], ok = true;
-      for (var f = 0; f < ru.frags.length; f++) { if (dn.indexOf(ru.frags[f]) === -1) { ok = false; break; } }
-      if (!ok) continue;
+      var ru = rules[i], matched = false, score = 0;
+      for (var a = 0; a < ru.alts.length; a++) {          // khớp nếu trúng BẤT KỲ biến thể nào
+        var frags = ru.alts[a], ok = true, s = 0;
+        for (var f = 0; f < frags.length; f++) {
+          if (dn.indexOf(frags[f]) === -1) { ok = false; break; }
+          s = Math.max(s, frags[f].length);
+        }
+        if (ok) { matched = true; score = Math.max(score, s); }
+      }
+      if (!matched) continue;
       accts.add(norm(ru.acct));
-      var score = 0; for (var g = 0; g < ru.frags.length; g++) score = Math.max(score, ru.frags[g].length);
       if (score > bestScore) { bestScore = score; best = ru; }
     }
     return best ? { rule: best, distinctAccts: accts } : null;
@@ -199,6 +214,7 @@
           rec = 'Bổ sung mô tả hoặc kiểm tra thủ công.';
         } else {
           var m = matchDesc(desc, std.rules);
+          var pending = m && m.rule.status.toUpperCase() !== 'CONFIRMED';
           if (!m) {
             level = 'YELLOW'; gk = 'NO-RULE';
             acctSug = '(chưa có chuẩn)';
@@ -209,20 +225,22 @@
             acctSug = '(chưa có chuẩn)';
             reason = 'Description khớp nhiều quy tắc chuẩn trỏ Account khác nhau; chuẩn chưa thống nhất.';
             rec = 'Xác nhận Account đúng theo bản chất giao dịch trước khi chốt.';
-          } else if (m.rule.status.toUpperCase() !== 'CONFIRMED') {
+          } else if (norm(m.rule.acct) !== norm(acct)) {
+            // Account LỆCH so với chuẩn -> ĐỎ, bất kể quy tắc đã duyệt hay chờ duyệt
+            level = 'RED'; gk = 'MISMATCH:' + norm(m.rule.key);
+            acctSug = m.rule.acct + (pending ? ' (quy tắc chờ duyệt)' : '');
+            reason = 'File ghi "' + acct + '", nhưng chuẩn cho "' + m.rule.key + '" là "' + m.rule.acct + '"'
+                   + (pending ? ' (quy tắc đang chờ duyệt — TO CONFIRM).' : '.');
+            rec = 'Đổi Account sang ' + m.rule.acct + (pending ? ' (xác nhận với Director).' : '.');
+          } else if (pending) {
+            // Account TRÙNG chuẩn nhưng quy tắc còn chờ duyệt -> VÀNG
             level = 'YELLOW'; gk = 'TOCONFIRM:' + norm(m.rule.key);
             acctSug = m.rule.acct + ' (chờ duyệt)';
-            var same = norm(m.rule.acct) === norm(acct);
-            reason = 'Khớp quy tắc "' + m.rule.key + '" nhưng quy tắc đang chờ duyệt (TO CONFIRM). '
-                   + (same ? 'Account trùng chuẩn tạm.' : ('Account hiện "' + acct + '" ≠ chuẩn tạm "' + m.rule.acct + '".'));
-            rec = 'Hỏi Director duyệt quy tắc trước khi kết luận.';
-          } else if (norm(m.rule.acct) === norm(acct)) {
-            continue; // ĐÚNG — không tô gì
+            reason = 'Account trùng chuẩn tạm "' + m.rule.acct + '" nhưng quy tắc "' + m.rule.key
+                   + '" đang chờ duyệt (TO CONFIRM).';
+            rec = 'Hỏi Director duyệt quy tắc để chốt.';
           } else {
-            level = 'RED'; gk = 'MISMATCH:' + norm(m.rule.key);
-            acctSug = m.rule.acct;
-            reason = 'File ghi "' + acct + '", nhưng chuẩn (CONFIRMED) cho "' + m.rule.key + '" là "' + m.rule.acct + '".';
-            rec = 'Đổi Account sang ' + m.rule.acct + '.';
+            continue; // ĐÚNG (khớp quy tắc CONFIRMED) — không tô gì
           }
         }
 

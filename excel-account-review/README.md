@@ -22,13 +22,15 @@ font, merge). Tác động duy nhất là **tô nền**, theo 2 tầng:
 
 Dòng đúng: **không tô gì**. Dòng vừa đỏ vừa vàng → ưu tiên **đỏ**.
 
-**Khi nào ĐỎ:** description khớp một quy tắc chuẩn `CONFIRMED` nhưng Account trong
-file **khác** Account chuẩn.
+**Khi nào ĐỎ:** description khớp một quy tắc chuẩn (đơn nghĩa) nhưng Account trong
+file **khác** Account chuẩn — **bất kể** quy tắc đã `CONFIRMED` hay còn `TO CONFIRM`.
+Account đã lệch là lệch; trạng thái chờ duyệt chỉ được ghi chú thêm ở cột lý do.
 
 **Khi nào VÀNG:** (nguyên tắc “không chắc thì vàng, không bao giờ đoán rồi tô đỏ”)
 - Không có quy tắc chuẩn nào khớp description.
-- Quy tắc khớp đang ở trạng thái **`TO CONFIRM`** (chờ Director duyệt).
 - Description khớp **nhiều quy tắc trỏ Account khác nhau** (chuẩn mâu thuẫn).
+- Account **trùng** chuẩn nhưng quy tắc đó còn ở trạng thái **`TO CONFIRM`**
+  (đồng ý với một quy tắc chưa duyệt → nhắc xác nhận).
 - Ô Account **trống**.
 
 **Bỏ qua (không tô):** dòng có Account nằm trong sheet **“No Mapping Value”** của
@@ -49,6 +51,9 @@ subtotal / footer; dòng thiếu cả Description lẫn Account.
   xác định cột khóa (Description) và cột giá trị (Account).
 - **File chuẩn:** đọc các sheet có cột `... to match` + `Account` (+ `Status`);
   đọc sheet `No Mapping Value` để lấy danh sách Account cần bỏ qua.
+- **Keyword nhiều biến thể:** dấu `/` trong key (vd. `COLES / COLESSUPERM`,
+  `BUSINESS FUEL / FLEET CARD`) được hiểu là **HOẶC** — khớp nếu description
+  trúng bất kỳ biến thể nào. Placeholder `<...>` được bỏ, `...` là chỗ bất kỳ.
 
 ## Tùy chọn
 - ☑ *Tô vàng cả những dòng thiếu Description* — mặc định **tắt** (không có key để dò).
