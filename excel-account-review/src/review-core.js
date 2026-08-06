@@ -45,18 +45,39 @@
     cell.style = Object.assign({}, cell.style, { fill: solid(argb) });
   }
 
+  // Chuyển một biến thể có placeholder số "N" thành regex.
+  //   <...> và "..."  → .*? (bất kỳ) ; "N" đứng riêng → \d+ (một con số).
+  // Nhờ vậy "<supplier ref> delivered N, returned N" khớp
+  //   "16/1 99151939 delivered 3, returned 4" nhưng KHÔNG khớp biến thể
+  //   dùng "received" (chữ khác nên literal "delivered" không trúng).
+  function altToRegex(part) {
+    var W = '';                                   // đánh dấu wildcard tạm
+    var s = String(part).replace(/<[^>]*>/g, W).replace(/\.\.\.|…/g, W);
+    s = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');        // escape ký tự regex (W an toàn)
+    s = s.replace(/\s+/g, '\\s+');                       // khoảng trắng linh hoạt
+    s = s.replace(/\bN\b/g, '\\d+');                     // placeholder số
+    s = s.replace(new RegExp(W, 'g'), '.*?');            // wildcard
+    return new RegExp(s, 'i');
+  }
+
   // ---- Tách 1 keyword/pattern thành các "biến thể" (alternatives) ----
   // Dấu " / " trong key nghĩa là HOẶC → mỗi bên là một biến thể riêng
   //   (vd. "COLES / COLESSUPERM", "BUSINESS FUEL / FLEET CARD").
-  // Trong mỗi biến thể: bỏ <placeholder>, cắt theo "..." → các mảnh literal
-  //   phải cùng xuất hiện trong description thì biến thể mới khớp.
-  // Trả về mảng các biến thể, mỗi biến thể là mảng fragments đã chuẩn hoá.
+  // Mỗi biến thể trả về { frags, re, score }:
+  //   · Nếu có placeholder số "N": dùng regex (re), frags = null.
+  //   · Còn lại: cắt theo "...", bỏ <placeholder> → mảng fragments literal
+  //     (tất cả phải cùng xuất hiện trong description mới khớp).
+  //   · score = độ dài đoạn literal dài nhất — dùng để chấm độ cụ thể.
   function toAlts(key) {
     var alts = [];
     String(key).split(/\s*\/\s*/).forEach(function (part) {
-      var frags = part.replace(/<[^>]*>/g, ' ').split(/\.\.\.|…/).map(norm)
-        .filter(function (f) { return f.length > 0; });
-      if (frags.length) alts.push(frags);
+      var body = part.replace(/<[^>]*>/g, ' ');
+      var frags = body.split(/\.\.\.|…/).map(norm).filter(function (f) { return f.length > 0; });
+      if (!frags.length) return;
+      var score = 0;
+      frags.forEach(function (f) { score = Math.max(score, f.length); });
+      if (/\bN\b/.test(body)) alts.push({ frags: null, re: altToRegex(part), score: score });
+      else alts.push({ frags: frags, re: null, score: score });
     });
     return alts;
   }
@@ -123,42 +144,54 @@
     return { rules: rules, excluded: excluded, sheetsUsed: sheetsUsed };
   }
 
-  // Khớp 1 description với bộ rule → { rule, distinctAccts:Set } hoặc null
-  function matchDesc(desc, rules) {
+  // Khớp 1 description với TẤT CẢ rule → mảng { rule, score } (score = độ cụ thể).
+  function matchAll(desc, rules) {
     var dn = norm(desc);
-    if (!dn) return null;
-    var best = null, bestScore = -1, accts = new Set();
+    if (!dn) return [];
+    var out = [];
     for (var i = 0; i < rules.length; i++) {
       var ru = rules[i], matched = false, score = 0;
       for (var a = 0; a < ru.alts.length; a++) {          // khớp nếu trúng BẤT KỲ biến thể nào
-        var frags = ru.alts[a], ok = true, s = 0;
-        for (var f = 0; f < frags.length; f++) {
-          if (dn.indexOf(frags[f]) === -1) { ok = false; break; }
-          s = Math.max(s, frags[f].length);
+        var alt = ru.alts[a], ok;
+        if (alt.re) {
+          ok = alt.re.test(dn);
+        } else {
+          ok = true;
+          for (var f = 0; f < alt.frags.length; f++) {
+            if (dn.indexOf(alt.frags[f]) === -1) { ok = false; break; }
+          }
         }
-        if (ok) { matched = true; score = Math.max(score, s); }
+        if (ok) { matched = true; score = Math.max(score, alt.score); }
       }
-      if (!matched) continue;
-      accts.add(norm(ru.acct));
-      if (score > bestScore) { bestScore = score; best = ru; }
+      if (matched) out.push({ rule: ru, score: score });
     }
-    return best ? { rule: best, distinctAccts: accts } : null;
+    return out;
+  }
+
+  // Rút gọn: lấy rule cụ thể nhất khớp description (cho ô Account trống).
+  function matchDesc(desc, rules) {
+    var all = matchAll(desc, rules);
+    if (!all.length) return null;
+    var max = 0; all.forEach(function (m) { if (m.score > max) max = m.score; });
+    var best = all.filter(function (m) { return m.score === max; })[0].rule;
+    return { rule: best };
   }
 
   // =====================================================================
   // 2) DÒ HEADER + CỘT trong file cần rà soát
   // =====================================================================
   function detectLayout(ws) {
-    var hdrRow = -1, descCol = -1, acctCol = -1, firstCol = 1, lastCol = ws.columnCount || 1;
+    var hdrRow = -1, descCol = -1, acctCol = -1, dateCol = -1, firstCol = 1, lastCol = ws.columnCount || 1;
     for (var r = 1; r <= Math.min(15, ws.rowCount || 15); r++) {
-      var dC = -1, aC = -1;
+      var dC = -1, aC = -1, dtC = -1;
       for (var c = 1; c <= (ws.columnCount || 20); c++) {
         var t = norm(cellText(ws.getCell(r, c)));
         if (!t) continue;
         if (aC === -1 && t === 'ACCOUNT') aC = c;
         if (dC === -1 && (/DESCRIPTION/.test(t) || /MEMO/.test(t))) dC = c;
+        if (dtC === -1 && t === 'DATE') dtC = c;
       }
-      if (dC !== -1 && aC !== -1) { hdrRow = r; descCol = dC; acctCol = aC; break; }
+      if (dC !== -1 && aC !== -1) { hdrRow = r; descCol = dC; acctCol = aC; dateCol = dtC; break; }
     }
     // phạm vi cột dữ liệu = từ cột có header trái nhất đến phải nhất
     if (hdrRow > 0) {
@@ -169,7 +202,19 @@
       firstCol = Math.min(lo, descCol, acctCol);
       lastCol = Math.max(hi, descCol, acctCol);
     }
-    return { hdrRow: hdrRow, descCol: descCol, acctCol: acctCol, firstCol: firstCol, lastCol: lastCol };
+    return { hdrRow: hdrRow, descCol: descCol, acctCol: acctCol, dateCol: dateCol, firstCol: firstCol, lastCol: lastCol };
+  }
+
+  // Dòng dữ liệu thật? Bỏ chân trang báo cáo & tiêu đề nhóm / subtotal:
+  //   nếu có cột Date thì dòng phải có giá trị Date và KHÔNG phải ô gộp ngang
+  //   (chân trang QuickBooks gộp cả dòng A:J nên ô Date là ô con của vùng gộp).
+  function isDataRow(ws, r, L) {
+    if (L.dateCol > 0) {
+      var dc = ws.getCell(r, L.dateCol);
+      if (dc.isMerged && dc.master !== dc) return false;   // ô con của vùng gộp ngang (banner/footer)
+      if (dc.value === null || dc.value === undefined || dc.value === '') return false; // không có ngày → không phải giao dịch
+    }
+    return true;
   }
 
   // =====================================================================
@@ -189,6 +234,8 @@
       var acctLetter = ws.getColumn(L.acctCol).letter;
 
       for (var r = L.hdrRow + 1; r <= ws.rowCount; r++) {
+        // bỏ chân trang báo cáo / tiêu đề nhóm / subtotal (không có ngày ở cột Date)
+        if (!isDataRow(ws, r, L)) continue;
         var desc = cellText(ws.getCell(r, L.descCol));
         var acctCell = ws.getCell(r, L.acctCol);
         var acct = cellText(acctCell);
@@ -213,34 +260,58 @@
           reason = 'Không có Description để đối chiếu với file chuẩn.';
           rec = 'Bổ sung mô tả hoặc kiểm tra thủ công.';
         } else {
-          var m = matchDesc(desc, std.rules);
-          var pending = m && m.rule.status.toUpperCase() !== 'CONFIRMED';
-          if (!m) {
+          var all = matchAll(desc, std.rules);
+          if (!all.length) {
             level = 'YELLOW'; gk = 'NO-RULE';
             acctSug = '(chưa có chuẩn)';
             reason = 'Không tìm thấy quy tắc chuẩn khớp với description này.';
             rec = 'Bổ sung quy tắc vào file chuẩn hoặc kiểm tra thủ công.';
-          } else if (m.distinctAccts.size > 1) {
-            level = 'YELLOW'; gk = 'AMBIGUOUS:' + norm(m.rule.key);
-            acctSug = '(chưa có chuẩn)';
-            reason = 'Description khớp nhiều quy tắc chuẩn trỏ Account khác nhau; chuẩn chưa thống nhất.';
-            rec = 'Xác nhận Account đúng theo bản chất giao dịch trước khi chốt.';
-          } else if (norm(m.rule.acct) !== norm(acct)) {
-            // Account LỆCH so với chuẩn -> ĐỎ, bất kể quy tắc đã duyệt hay chờ duyệt
-            level = 'RED'; gk = 'MISMATCH:' + norm(m.rule.key);
-            acctSug = m.rule.acct + (pending ? ' (quy tắc chờ duyệt)' : '');
-            reason = 'File ghi "' + acct + '", nhưng chuẩn cho "' + m.rule.key + '" là "' + m.rule.acct + '"'
-                   + (pending ? ' (quy tắc đang chờ duyệt — TO CONFIRM).' : '.');
-            rec = 'Đổi Account sang ' + m.rule.acct + (pending ? ' (xác nhận với Director).' : '.');
-          } else if (pending) {
-            // Account TRÙNG chuẩn nhưng quy tắc còn chờ duyệt -> VÀNG
-            level = 'YELLOW'; gk = 'TOCONFIRM:' + norm(m.rule.key);
-            acctSug = m.rule.acct + ' (chờ duyệt)';
-            reason = 'Account trùng chuẩn tạm "' + m.rule.acct + '" nhưng quy tắc "' + m.rule.key
-                   + '" đang chờ duyệt (TO CONFIRM).';
-            rec = 'Hỏi Director duyệt quy tắc để chốt.';
           } else {
-            continue; // ĐÚNG (khớp quy tắc CONFIRMED) — không tô gì
+            // Ưu tiên: chỉ giữ các rule KHỚP CỤ THỂ NHẤT (score cao nhất).
+            var maxScore = 0; all.forEach(function (mm) { if (mm.score > maxScore) maxScore = mm.score; });
+            var top = all.filter(function (mm) { return mm.score === maxScore; });
+            var validAccts = new Set(), topKeys = new Set();
+            top.forEach(function (mm) { validAccts.add(norm(mm.rule.acct)); topKeys.add(norm(mm.rule.key)); });
+            var acctN = norm(acct);
+            var repKey = top[0].rule.key;
+
+            if (validAccts.has(acctN)) {
+              // Account khớp MỘT nhánh hợp lệ của quy tắc cụ thể nhất.
+              var confirmedHit = top.some(function (mm) {
+                return norm(mm.rule.acct) === acctN && mm.rule.status.toUpperCase() === 'CONFIRMED';
+              });
+              if (confirmedHit) continue;                         // ĐÚNG — không tô
+              // trùng chuẩn nhưng quy tắc còn chờ duyệt -> VÀNG
+              var prule = top.filter(function (mm) { return norm(mm.rule.acct) === acctN; })[0].rule;
+              level = 'YELLOW'; gk = 'TOCONFIRM:' + norm(prule.key);
+              acctSug = prule.acct + ' (chờ duyệt)';
+              reason = 'Account trùng chuẩn tạm "' + prule.acct + '" nhưng quy tắc "' + prule.key
+                     + '" đang chờ duyệt (TO CONFIRM).';
+              rec = 'Hỏi Director duyệt quy tắc để chốt.';
+            } else if (validAccts.size === 1) {
+              // Chuẩn chỉ có 1 Account, file ghi khác -> ĐỎ (dù CONFIRMED hay chờ duyệt).
+              var only = top[0].rule;
+              var pend = !top.some(function (mm) { return mm.rule.status.toUpperCase() === 'CONFIRMED'; });
+              level = 'RED'; gk = 'MISMATCH:' + norm(only.key);
+              acctSug = only.acct + (pend ? ' (quy tắc chờ duyệt)' : '');
+              reason = 'File ghi "' + acct + '", nhưng chuẩn cho "' + only.key + '" là "' + only.acct + '"'
+                     + (pend ? ' (quy tắc đang chờ duyệt — TO CONFIRM).' : '.');
+              rec = 'Đổi Account sang ' + only.acct + (pend ? ' (xác nhận với Director).' : '.');
+            } else if (topKeys.size === 1) {
+              // Cùng 1 quy tắc, nhiều nhánh Account hợp lệ, nhưng file không khớp nhánh nào -> ĐỎ.
+              var choices = top.map(function (mm) { return mm.rule.acct; })
+                .filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' hoặc ');
+              level = 'RED'; gk = 'MISMATCH:' + norm(repKey);
+              acctSug = choices;
+              reason = 'File ghi "' + acct + '", nhưng chuẩn cho "' + repKey + '" chỉ nhận: ' + choices + '.';
+              rec = 'Đổi Account sang một trong: ' + choices + '.';
+            } else {
+              // Nhiều quy tắc KHÁC key, cùng độ cụ thể, trỏ Account khác nhau -> thật sự mâu thuẫn.
+              level = 'YELLOW'; gk = 'AMBIGUOUS:' + norm(repKey);
+              acctSug = '(chưa có chuẩn)';
+              reason = 'Description khớp nhiều quy tắc cùng độ ưu tiên nhưng trỏ Account khác nhau; chuẩn chưa thống nhất.';
+              rec = 'Xác nhận Account đúng theo bản chất giao dịch trước khi chốt.';
+            }
           }
         }
 
