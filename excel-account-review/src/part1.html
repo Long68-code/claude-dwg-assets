@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rà soát Account theo file chuẩn — Excel Review</title>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --ink:#1c2430; --muted:#5b6675; --line:#e2e7f0;
+    --brand:#305496; --brand2:#3f7ad1; --ok:#1a7f4b;
+    --red-bg:#fbe4e6; --red-cell:#ffc7ce; --yel-bg:#fff8e1; --yel-cell:#ffeb9c;
+    --shadow:0 1px 3px rgba(20,30,50,.08),0 8px 24px rgba(20,30,50,.06);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0f141b; --card:#161d27; --ink:#e8edf5; --muted:#9aa7b8; --line:#26303d;
+      --brand:#5b8ad6; --brand2:#6fa0e6;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Noto Sans",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 64px}
+  header h1{font-size:22px;margin:0 0 4px}
+  header p{margin:0;color:var(--muted);font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:20px;margin-top:18px;box-shadow:var(--shadow)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+  .drop{border:1.5px dashed var(--line);border-radius:12px;padding:18px;text-align:center;
+    cursor:pointer;transition:.15s;background:transparent}
+  .drop:hover{border-color:var(--brand2);background:rgba(63,122,209,.05)}
+  .drop.has{border-style:solid;border-color:var(--ok);background:rgba(26,127,75,.06)}
+  .drop .lbl{font-weight:600;font-size:14px}
+  .drop .sub{font-size:12.5px;color:var(--muted);margin-top:4px;word-break:break-all}
+  .drop input{display:none}
+  .badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;
+    background:rgba(48,84,150,.12);color:var(--brand);margin-bottom:8px}
+  .opts{margin-top:14px;font-size:13.5px;color:var(--muted);display:flex;gap:8px;align-items:flex-start}
+  .opts input{margin-top:3px}
+  button.go{margin-top:16px;width:100%;border:0;border-radius:11px;padding:13px;font-size:15px;
+    font-weight:700;color:#fff;background:linear-gradient(180deg,var(--brand2),var(--brand));
+    cursor:pointer;transition:.15s;box-shadow:0 4px 14px rgba(48,84,150,.28)}
+  button.go:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
+  button.go:not(:disabled):hover{filter:brightness(1.05)}
+  #log{margin-top:14px;font-size:13px;color:var(--muted);white-space:pre-wrap;min-height:20px}
+  .stat{display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 14px}
+  .pill{flex:1;min-width:120px;border-radius:11px;padding:12px 14px;border:1px solid var(--line)}
+  .pill b{display:block;font-size:26px;line-height:1.1}
+  .pill.r{background:var(--red-bg)} .pill.r b{color:#b0202f}
+  .pill.y{background:var(--yel-bg)} .pill.y b{color:#8a6100}
+  .pill span{font-size:12.5px;color:#444}
+  .legend{font-size:12.5px;color:var(--muted);margin:6px 0 2px}
+  .chip{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin:0 4px 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+  th{background:var(--brand);color:#fff;position:sticky;top:0}
+  td.lv{font-weight:700;white-space:nowrap}
+  tr.red td.lv{background:var(--red-cell)} tr.yel td.lv{background:var(--yel-cell)}
+  .tblwrap{max-height:420px;overflow:auto;border-radius:10px;border:1px solid var(--line);margin-top:8px}
+  .foot{font-size:12px;color:var(--muted);margin-top:22px;text-align:center}
+  .hide{display:none}
+  a.dl{color:var(--brand);font-weight:700;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Rà soát Account theo file chuẩn</h1>
+    <p>Đối chiếu <b>Description → Account</b> với file chuẩn (Knowledge), tô màu cảnh báo,
+       xuất file Excel mới. Dữ liệu xử lý ngay trên trình duyệt — <b>không tải lên máy chủ</b>.</p>
+  </header>
+
+  <div class="card">
+    <div class="grid2">
+      <label class="drop" id="dropT">
+        <div class="badge">① File cần rà soát</div>
+        <div class="lbl">Kéo thả hoặc bấm chọn</div>
+        <div class="sub" id="subT">file Long gửi (.xlsx)</div>
+        <input type="file" id="fileT" accept=".xlsx,.xlsm">
+      </label>
+      <label class="drop" id="dropS">
+        <div class="badge">② File chuẩn (Knowledge)</div>
+        <div class="lbl">Kéo thả hoặc bấm chọn</div>
+        <div class="sub" id="subS">bảng Description → Account (.xlsx)</div>
+        <input type="file" id="fileS" accept=".xlsx">
+      </label>
+    </div>
+
+    <label class="opts">
+      <input type="checkbox" id="optBlank">
+      <span>Tô vàng cả những dòng <b>thiếu Description</b> (mặc định bỏ qua vì không có căn cứ để dò).</span>
+    </label>
+
+    <button class="go" id="run" disabled>Rà soát &amp; tải file kết quả</button>
+    <div id="log"></div>
+  </div>
+
+  <div class="card hide" id="result">
+    <div class="stat">
+      <div class="pill r"><b id="nRed">0</b><span>ô ĐỎ — sai rõ ràng so với chuẩn</span></div>
+      <div class="pill y"><b id="nYel">0</b><span>ô VÀNG — nghi ngờ, cần xem lại</span></div>
+    </div>
+    <div class="legend">
+      <span class="chip" style="background:var(--red-bg)"></span>dòng đỏ nhạt ·
+      <span class="chip" style="background:var(--red-cell)"></span>ô sai
+      <span class="chip" style="background:var(--yel-bg)"></span>dòng vàng nhạt ·
+      <span class="chip" style="background:var(--yel-cell)"></span>ô nghi ngờ
+      &nbsp;— file kết quả có sheet <b>“ĐIỀU CHỈNH”</b> ở đầu.
+    </div>
+    <div id="dlwrap" style="margin-top:8px"></div>
+    <div class="tblwrap"><table id="tbl"></table></div>
+  </div>
+
+  <p class="foot">Chạy hoàn toàn offline • Giữ nguyên 100% dữ liệu gốc, chỉ tô nền • ExcelJS</p>
+</div>
